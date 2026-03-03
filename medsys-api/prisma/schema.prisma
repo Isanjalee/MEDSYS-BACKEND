@@ -1,0 +1,289 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  owner
+  doctor
+  assistant
+  @@map("user_role")
+}
+
+enum Gender {
+  male
+  female
+  other
+  @@map("gender")
+}
+
+enum AppointmentStatus {
+  waiting
+  in_consultation
+  completed
+  cancelled
+  @@map("appointment_status")
+}
+
+enum PriorityLevel {
+  normal
+  urgent
+  critical
+  @@map("priority_level")
+}
+
+enum AllergySeverity {
+  low
+  moderate
+  high
+  @@map("allergy_severity")
+}
+
+enum DrugSource {
+  Clinical
+  Outside
+  @@map("drug_source")
+}
+
+enum InventoryCategory {
+  medicine
+  supply
+  equipment
+  @@map("inventory_category")
+}
+
+enum InventoryMovementType {
+  in
+  out
+  adjustment
+  @@map("inventory_movement_type")
+}
+
+enum TestOrderStatus {
+  ordered
+  completed
+  cancelled
+  @@map("test_order_status")
+}
+
+model User {
+  id                   BigInt                @id @default(autoincrement())
+  uuid                 String                @unique @db.Uuid
+  email                String                @unique @db.Citext
+  passwordHash         String                @map("password_hash")
+  fullName             String                @map("full_name") @db.VarChar(150)
+  role                 UserRole
+  isActive             Boolean               @default(true) @map("is_active")
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+  refreshTokens        RefreshToken[]
+  doctorAppointments   Appointment[]         @relation("doctor_appointments")
+  assistantAppointments Appointment[]        @relation("assistant_appointments")
+  doctorEncounters     Encounter[]           @relation("doctor_encounters")
+  doctorPrescriptions  Prescription[]        @relation("doctor_prescriptions")
+  inventoryMovements   InventoryMovement[]   @relation("movement_creator")
+  auditLogs            AuditLog[]            @relation("audit_actor")
+
+  @@index([role, isActive], map: "ix_users_role_is_active")
+  @@map("users")
+}
+
+model RefreshToken {
+  id        BigInt    @id @default(autoincrement())
+  userId    BigInt    @map("user_id")
+  tokenHash String    @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@index([userId, expiresAt], map: "ix_refresh_tokens_user_expires")
+  @@map("refresh_tokens")
+}
+
+model Patient {
+  id            BigInt      @id @default(autoincrement())
+  uuid          String      @unique @db.Uuid
+  nic           String?     @unique @db.VarChar(20)
+  fullName      String      @map("full_name") @db.VarChar(180)
+  dob           DateTime?   @db.Date
+  gender        Gender?
+  phone         String?     @db.VarChar(30)
+  address       String?
+  bloodGroup    String?     @map("blood_group") @db.VarChar(5)
+  isActive      Boolean     @default(true) @map("is_active")
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+  allergies     PatientAllergy[]
+  appointments  Appointment[]
+  encounters    Encounter[]
+  prescriptions Prescription[]
+
+  @@index([fullName], map: "ix_patients_full_name")
+  @@map("patients")
+}
+
+model PatientAllergy {
+  id          BigInt           @id @default(autoincrement())
+  patientId   BigInt           @map("patient_id")
+  allergyName String           @map("allergy_name") @db.VarChar(120)
+  severity    AllergySeverity?
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  patient     Patient          @relation(fields: [patientId], references: [id])
+
+  @@index([patientId], map: "ix_patient_allergies_patient")
+  @@map("patient_allergies")
+}
+
+model Appointment {
+  id           BigInt             @id @default(autoincrement())
+  patientId    BigInt             @map("patient_id")
+  doctorId     BigInt?            @map("doctor_id")
+  assistantId  BigInt?            @map("assistant_id")
+  scheduledAt  DateTime           @map("scheduled_at") @db.Timestamptz(6)
+  status       AppointmentStatus  @default(waiting)
+  reason       String?
+  priority     PriorityLevel      @default(normal)
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  patient      Patient            @relation(fields: [patientId], references: [id])
+  doctor       User?              @relation("doctor_appointments", fields: [doctorId], references: [id])
+  assistant    User?              @relation("assistant_appointments", fields: [assistantId], references: [id])
+  encounter    Encounter?
+
+  @@index([status, scheduledAt], map: "ix_appointments_status_scheduled_at")
+  @@index([patientId], map: "ix_appointments_patient_id")
+  @@index([doctorId, scheduledAt], map: "ix_appointments_doctor_scheduled_at")
+  @@map("appointments")
+}
+
+model Encounter {
+  id                BigInt              @id @default(autoincrement())
+  appointmentId     BigInt              @unique @map("appointment_id")
+  patientId         BigInt              @map("patient_id")
+  doctorId          BigInt              @map("doctor_id")
+  notes             String?
+  nextVisitDate     DateTime?           @map("next_visit_date") @db.Date
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  appointment       Appointment         @relation(fields: [appointmentId], references: [id])
+  patient           Patient             @relation(fields: [patientId], references: [id])
+  doctor            User                @relation("doctor_encounters", fields: [doctorId], references: [id])
+  diagnoses         EncounterDiagnosis[]
+  testOrders        TestOrder[]
+  prescriptions     Prescription[]
+
+  @@index([patientId, createdAt(sort: Desc)], map: "ix_encounters_patient_created_at")
+  @@map("encounters")
+}
+
+model EncounterDiagnosis {
+  id            BigInt    @id @default(autoincrement())
+  encounterId   BigInt    @map("encounter_id")
+  icd10Code     String?   @map("icd10_code") @db.VarChar(16)
+  diagnosisName String    @map("diagnosis_name") @db.VarChar(255)
+  encounter     Encounter @relation(fields: [encounterId], references: [id])
+
+  @@index([encounterId], map: "ix_encounter_diagnoses_encounter")
+  @@index([icd10Code], map: "ix_encounter_diagnoses_icd10")
+  @@map("encounter_diagnoses")
+}
+
+model TestOrder {
+  id          BigInt          @id @default(autoincrement())
+  encounterId BigInt          @map("encounter_id")
+  testName    String          @map("test_name") @db.VarChar(180)
+  status      TestOrderStatus @default(ordered)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  encounter   Encounter       @relation(fields: [encounterId], references: [id])
+
+  @@index([encounterId], map: "ix_test_orders_encounter")
+  @@map("test_orders")
+}
+
+model Prescription {
+  id          BigInt             @id @default(autoincrement())
+  encounterId BigInt             @map("encounter_id")
+  patientId   BigInt             @map("patient_id")
+  doctorId    BigInt             @map("doctor_id")
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  encounter   Encounter          @relation(fields: [encounterId], references: [id])
+  patient     Patient            @relation(fields: [patientId], references: [id])
+  doctor      User               @relation("doctor_prescriptions", fields: [doctorId], references: [id])
+  items       PrescriptionItem[]
+
+  @@index([patientId, createdAt(sort: Desc)], map: "ix_prescriptions_patient_created_at")
+  @@index([encounterId], map: "ix_prescriptions_encounter_id")
+  @@map("prescriptions")
+}
+
+model PrescriptionItem {
+  id             BigInt       @id @default(autoincrement())
+  prescriptionId BigInt       @map("prescription_id")
+  drugName       String       @map("drug_name") @db.VarChar(180)
+  dose           String?      @db.VarChar(60)
+  frequency      String?      @db.VarChar(80)
+  duration       String?      @db.VarChar(80)
+  quantity       Decimal      @db.Decimal(12, 2)
+  source         DrugSource
+  prescription   Prescription @relation(fields: [prescriptionId], references: [id])
+
+  @@index([prescriptionId], map: "ix_prescription_items_prescription")
+  @@map("prescription_items")
+}
+
+model InventoryItem {
+  id               BigInt              @id @default(autoincrement())
+  sku              String?             @unique @db.VarChar(80)
+  name             String              @db.VarChar(180)
+  category         InventoryCategory
+  unit             String              @db.VarChar(20)
+  stock            Decimal             @default(0) @db.Decimal(12, 2)
+  reorderLevel     Decimal             @default(0) @map("reorder_level") @db.Decimal(12, 2)
+  isActive         Boolean             @default(true) @map("is_active")
+  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  inventoryMoves   InventoryMovement[]
+
+  @@index([name], map: "ix_inventory_items_name")
+  @@index([stock, reorderLevel], map: "ix_inventory_items_stock_reorder")
+  @@map("inventory_items")
+}
+
+model InventoryMovement {
+  id              BigInt                @id @default(autoincrement())
+  inventoryItemId BigInt                @map("inventory_item_id")
+  movementType    InventoryMovementType @map("movement_type")
+  quantity        Decimal               @db.Decimal(12, 2)
+  referenceType   String?               @map("reference_type") @db.VarChar(30)
+  referenceId     BigInt?               @map("reference_id")
+  note            String?
+  createdById     BigInt                @map("created_by_id")
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  item            InventoryItem         @relation(fields: [inventoryItemId], references: [id])
+  createdBy       User                  @relation("movement_creator", fields: [createdById], references: [id])
+
+  @@index([inventoryItemId, createdAt(sort: Desc)], map: "ix_inventory_movements_item_created_at")
+  @@map("inventory_movements")
+}
+
+model AuditLog {
+  id         BigInt    @id @default(autoincrement())
+  actorUserId BigInt?  @map("actor_user_id")
+  entityType String    @map("entity_type") @db.VarChar(60)
+  entityId   BigInt?   @map("entity_id")
+  action     String    @db.VarChar(30)
+  ip         String?   @db.Inet
+  userAgent  String?   @map("user_agent")
+  payload    Json?
+  requestId  String    @map("request_id") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  actor      User?     @relation("audit_actor", fields: [actorUserId], references: [id])
+
+  @@index([createdAt(sort: Desc)], map: "ix_audit_logs_created_at")
+  @@index([entityType, entityId], map: "ix_audit_logs_entity")
+  @@map("audit_logs")
+}
